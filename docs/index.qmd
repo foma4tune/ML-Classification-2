@@ -1,0 +1,50 @@
+---
+title: "Classification Models"
+format: 
+  html:
+    embed-resources: true
+    toc: true
+    code-fold: true
+execute:
+  warning: false
+editor_options: 
+chunk_output_type: console
+editor: visual
+---
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(skimr)
+library(gtExtras)
+library(tidymodels)
+library(future)
+```
+
+# Import/Load Data
+
+```{r}
+birdclef_2026train <- read_csv("C:/Users/foma/Downloads/train.csv")
+```
+
+# Get summary : glimpse & skim
+
+```{r}
+birdclef_2026train %>% 
+  glimpse() %>% 
+  skim()
+```
+
+# Get the bird names and arrange in descending order
+
+```{r}
+birdclef_2026train %>% 
+  count(scientific_name, class_name, sort = TRUE )
+```
+
+\[The most populated bird is Turdus rufiventris, find image below\]
+
+![](images/clipboard-4083824126.jpeg)
+
+\[Image download site\](<https://www.magnific.com/search?format=search&last_filter=page&last_value=1&page=1&query=Turdus+rufiventris>)
