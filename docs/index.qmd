@@ -48,3 +48,163 @@ birdclef_2026train %>%
 ![](images/clipboard-4083824126.jpeg)
 
 \[Image download site\](<https://www.magnific.com/search?format=search&last_filter=page&last_value=1&page=1&query=Turdus+rufiventris>)
+
+## Model the specific sound type (song, call, flight call, etc.) as a multi-class classification problem
+
+```{r}
+#note on creating != : shift+! then press =
+
+xc_data <- birdclef_2026train |>
+  filter(collection == "XC", type != "[]")
+```
+
+## Count raw type values
+
+```{r}
+xc_data |>
+  count(type, sort = TRUE)
+```
+
+## Count total distinct type combination(754 distinct combinations — many are multi-label)
+
+```{r}
+xc_data |> count(type) |> nrow()
+```
+
+## Extract first type by stripping list formatting and taking first element
+
+```{r}
+xc_clean <- xc_data |>
+  mutate(
+    type_primary = type |>
+      str_remove_all("\\[|\\]|'") |>   # remove [ ] '
+      str_split(",") |>
+      map_chr(\(x) str_trim(x[[1]]))    # take first element, trim whitespace
+  )
+```
+
+## Count the cleaned type_primary value
+
+```{r}
+xc_clean |>
+  count(type_primary, sort = TRUE)
+```
+
+## Count the cleaned distinct type_primary combination(127 distinct first element)
+
+```{r}
+xc_clean |>
+  count(type_primary, sort = TRUE) |>
+  nrow()
+```
+
+## Build cleaned multi-class outcome with lumped categories
+
+```{r}
+ambiguous <- c("uncertain", "?", "song?", "call?")
+
+xc_model <- xc_clean |>
+  filter(!type_primary %in% ambiguous) |>
+  mutate(
+    sound_type = fct_lump_min(type_primary, min = 50, other_level = "other") |>
+      fct_infreq()
+  ) |>
+  select(sound_type, class_name, rating, latitude, longitude, license)
+```
+
+## Split XC data and create cross-validation folds
+
+```{r}
+set.seed(7304)
+xc_split  <- initial_split(xc_model, strata = sound_type)
+xc_tr     <- training(xc_split)
+xc_te     <- testing(xc_split)
+xc_folds  <- vfold_cv(xc_tr, v = 5, strata = sound_type)
+```
+
+## Define interested metrics
+
+```{r}
+xc_metrics <- metric_set(roc_auc, accuracy, brier_class)
+```
+
+## Define recipes
+
+```{r}
+rf_rec <- recipe(sound_type ~ ., data = xc_tr) |>
+  step_novel(all_nominal_predictors()) |>
+  step_dummy(all_nominal_predictors()) |>
+  step_zv(all_predictors())
+```
+
+## Tune the random forest(mtry and min_n with over 20 point grid) to optimize ROC_AUC
+
+```{r}
+rf_tune_spec <- rand_forest(
+  mode  = "classification",
+  mtry  = tune(),
+  min_n = tune()
+) |>
+  set_engine("ranger")
+```
+
+```{r}
+rf_tune_wf <- workflow() |>
+  add_recipe(rf_rec) |>
+  add_model(rf_tune_spec)
+
+```
+
+```{r}
+set.seed(2951)
+rf_tune_res <- tune_grid(
+  rf_tune_wf,
+  resamples = xc_folds,
+  metrics   = xc_metrics,
+  grid      = 20
+)
+```
+
+```{r}
+show_best(rf_tune_res, metric = "roc_auc")
+```
+
+## Visualize tuning result
+
+```{r}
+autoplot(rf_tune_res, metric = "roc_auc")
+```
+
+## Extract all result for the best tune random forest configuration
+
+```{r}
+best_rf_params <- select_best(rf_tune_res, metric = "roc_auc")
+```
+
+## Get all metrics for the best configuration
+
+```{r}
+rf_tune_res |>
+  collect_metrics() |>
+  inner_join(best_rf_params |> select(mtry, min_n, .config),
+             by = c("mtry", "min_n", ".config"))
+```
+
+## Fit final tuned random forest on full training set and evaluate on test
+
+```{r}
+final_rf_wf <- finalize_workflow(rf_tune_wf, best_rf_params)
+
+final_fit <- last_fit(final_rf_wf, split = xc_split, metrics = xc_metrics)
+collect_metrics(final_fit)
+```
+
+## Plot confusion matrix
+
+```{r}
+collect_predictions(final_fit) |>
+  conf_mat(truth = sound_type, estimate = .pred_class) |>
+  autoplot(type = "heatmap") +
+  labs(title = "Confusion Matrix — Tuned Random Forest (Test Set)")
+
+```
